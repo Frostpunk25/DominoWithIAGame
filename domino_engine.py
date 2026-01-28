@@ -88,6 +88,10 @@ class DominoGame:
 
             self.hands[player].remove(ficha)
             
+            # --- FIX: Actualizar la lista 'mesa' ---
+            self.mesa.append(ficha)
+            # -------------------------------------
+
             if self.center_tile is None:
                 self.center_tile = ficha
                 self.extremos = [ficha[0], ficha[1]]

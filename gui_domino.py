@@ -28,7 +28,7 @@ class DominoGUI:
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("Dominó Pro v3 - Snake AI")
+        pygame.display.set_caption("Dominó Pro v3 - Snake AI (Espiral Fixed)")
         self.font = pygame.font.SysFont("Segoe UI", 18, bold=True)
         self.big_font = pygame.font.SysFont("Segoe UI", 40, bold=True)
         self.clock = pygame.time.Clock()
@@ -46,19 +46,17 @@ class DominoGUI:
         
     def draw_pips(self, surface, x, y, number, size, vertical):
         """Dibuja los puntos con precisión matemática"""
-        # Centro relativo del cuadrado donde van los puntos
         if vertical:
             cx, cy = x + size//2, y + size//2
         else:
-            cx, cy = x + size//2, y + size//2 # Logic adjusted by caller
+            cx, cy = x + size//2, y + size//2
             
         offset = size // 4
         r = 3
         
-        # Matriz de puntos (3x3)
         pips_map = [
-            (0,0), (-1,-1), (1,1), (1,-1), (-1,1), # Centro y esquinas
-            (-1,0), (1,0), (0,-1), (0,1)           # Medios
+            (0,0), (-1,-1), (1,1), (1,-1), (-1,1), 
+            (-1,0), (1,0), (0,-1), (0,1)
         ]
         
         active = []
@@ -80,11 +78,9 @@ class DominoGUI:
         w, h = (TILE_W, TILE_H) if vertical else (TILE_H, TILE_W)
         rect = pygame.Rect(x, y, w, h)
         
-        # Sombra
         pygame.draw.rect(self.screen, (20,20,20), (x+2, y+2, w, h), border_radius=4)
-        # Cuerpo
         pygame.draw.rect(self.screen, TILE_COLOR, rect, border_radius=4)
-        # Borde
+        
         color_borde = HIGHLIGHT if selected else (80,80,80)
         pygame.draw.rect(self.screen, color_borde, rect, 2 if selected else 1, border_radius=4)
         
@@ -96,7 +92,6 @@ class DominoGUI:
             self.draw_pips(self.screen, x, y+h//2, v2, half, True)
         else:
             pygame.draw.line(self.screen, (150,150,150), (x+w//2, y+4), (x+w//2, y+h-4), 1)
-            # Ajuste de coordenadas para horizontal
             self.draw_pips(self.screen, x, y, v1, half, False)
             self.draw_pips(self.screen, x+w//2, y, v2, half, False)
         
@@ -104,89 +99,90 @@ class DominoGUI:
 
     def calculate_snake_layout(self, history, start_x, start_y, start_direction):
         """
-        Calcula la posición (x,y) y orientación de cada ficha para que formen una serpiente.
-        start_direction: 1 (derecha), -1 (izquierda)
+        Lógica de Espiral:
+        - Rama Derecha (dir=1): Empieza derecha -> Gira ARRIBA -> Gira ABAJO...
+        - Rama Izquierda (dir=-1): Empieza izquierda -> Gira ABAJO -> Gira ARRIBA...
         """
         layout = []
         curr_x, curr_y = start_x, start_y
         direction = start_direction # 1=Der, -1=Izq
-        vertical_flow = False # True si estamos bajando/subiendo en una curva
         
-        # Dimensiones de avance
+        # Configurar dirección vertical inicial según la rama
+        # Si empieza a la derecha, el primer giro es hacia ARRIBA (-1)
+        # Si empieza a la izquierda, el primer giro es hacia ABAJO (1)
+        vertical_dir = -1 if start_direction == 1 else 1
+        
         step_long = TILE_H + GAP
         step_short = TILE_W + GAP
         
-        for i, move in enumerate(history):
+        for move in history:
             ficha = move['ficha']
             conector = move['conector']
             nuevo = move['nuevo_extremo']
             is_double = (ficha[0] == ficha[1])
             
-            # 1. Detectar Colisión con Márgenes
-            next_x = curr_x + (step_long * direction)
-            
-            turning = False
-            if direction == 1 and next_x > (SCREEN_WIDTH - MARGIN_RIGHT):
-                turning = True
-            elif direction == -1 and next_x < MARGIN_LEFT:
-                turning = True
-                
-            # Si toca girar
-            if turning:
-                # Bajar una fila (o subir si quisiéramos espiral compleja, aquí simple bajamos)
-                # Ajuste para que la ficha de giro quede bien puesta
-                if direction == 1: # Iba derecha, choca derecha
-                     curr_x -= (TILE_H - TILE_W) # Ajuste fino
-                
-                curr_y += step_long # Bajar
-                direction *= -1 # Invertir X
-                
-                # La ficha de la curva se dibuja especial
-                # Simplificación: Dibujamos la ficha en la nueva posición horizontal invertida
-                # o vertical si es doble.
-            
-            # 2. Calcular Coordenadas de Dibujo y Orientación
+            # 1. Determinar posición de dibujo actual
             draw_x, draw_y = curr_x, curr_y
             draw_vertical = False
             val_left, val_right = 0, 0
+            offset = 0
             
             if is_double:
                 draw_vertical = True
-                # Centrar doble respecto a la línea horizontal
+                # Ajuste vertical para centrar dobles
                 draw_y = curr_y - (TILE_H - TILE_W)//2
-                # Si vamos a la izquierda, ajustar X
+                
                 if direction == -1:
-                    draw_x = curr_x - TILE_W
+                    draw_x = curr_x - TILE_W 
                 
                 val_left, val_right = ficha[0], ficha[1]
-                
-                # Avance
-                offset = TILE_W + GAP
-                curr_x += (offset * direction)
+                offset = step_short
                 
             else:
                 draw_vertical = False
-                # Ficha acostada
                 if direction == -1:
                     draw_x = curr_x - TILE_H
-                    
-                # Rotación visual lógica:
-                # Si vamos a derecha (1), el conector está a la Izq.
-                # Si vamos a izquierda (-1), el conector está a la Der.
+                
                 if direction == 1:
                     val_left, val_right = conector, nuevo
                 else:
                     val_left, val_right = nuevo, conector
                 
-                # Avance
-                offset = TILE_H + GAP
-                curr_x += (offset * direction)
+                offset = step_long
 
             layout.append({
                 'x': draw_x, 'y': draw_y, 
                 'v1': val_left, 'v2': val_right, 
                 'vert': draw_vertical
             })
+            
+            # 2. Avanzar cursor
+            curr_x += (offset * direction)
+            
+            # 3. Verificar colisión y ajustar para el SIGUIENTE paso (Lógica de Espiral)
+            # Verificamos si el PROXIMO cursor se saldría
+            limit_right = SCREEN_WIDTH - MARGIN_RIGHT
+            limit_left = MARGIN_LEFT
+            
+            # Predicción de posición futura para detectar choque
+            next_x = curr_x + (step_long * direction)
+            
+            hit_right = (direction == 1) and (next_x > limit_right)
+            hit_left = (direction == -1) and (next_x < limit_left)
+            
+            if hit_right or hit_left:
+                # Girar horizontalmente
+                direction *= -1
+                
+                # Alinear X al borde opuesto para empate perfecto
+                if direction == 1: # Ahora vamos a la derecha (estábamos en el borde izq)
+                    curr_x = limit_left
+                else: # Ahora vamos a la izquierda (estábamos en el borde der)
+                    curr_x = limit_right
+                
+                # Aplicar movimiento vertical (Alternar según espiral)
+                curr_y += (step_long * vertical_dir)
+                vertical_dir *= -1 # Invertir para el próximo giro
             
         return layout
 
@@ -199,14 +195,13 @@ class DominoGUI:
         c_ficha = self.game.center_tile
         c_vert = (c_ficha[0] == c_ficha[1])
         
-        # Posición inicial del centro
         start_x = cx - (TILE_W//2 if c_vert else TILE_H//2)
-        start_y = cy - (TILE_W//2) # Centrado verticalmente
+        start_y = cy - (TILE_W//2) 
         
         self.draw_tile_graphic(start_x, start_y, c_ficha[0], c_ficha[1], c_vert)
         
         # 2. Calcular Ramas
-        # Rama Derecha (sale hacia X positivo)
+        # Rama Derecha
         off_x = (TILE_W if c_vert else TILE_H) + GAP
         r_x = start_x + off_x
         r_y = start_y + (TILE_H//2 if c_vert else TILE_W//2) - TILE_W//2
@@ -215,7 +210,7 @@ class DominoGUI:
         for item in layout_r:
             self.draw_tile_graphic(item['x'], item['y'], item['v1'], item['v2'], item['vert'])
             
-        # Rama Izquierda (sale hacia X negativo)
+        # Rama Izquierda
         l_x = start_x - GAP
         l_y = start_y + (TILE_H//2 if c_vert else TILE_W//2) - TILE_W//2
         
@@ -224,7 +219,7 @@ class DominoGUI:
             self.draw_tile_graphic(item['x'], item['y'], item['v1'], item['v2'], item['vert'])
 
     def draw_hands(self):
-        self.tile_rects = [] # Limpiar rects cliceables
+        self.tile_rects = [] 
         
         # Humano (Abajo)
         hand = self.game.hands[0]
@@ -238,7 +233,7 @@ class DominoGUI:
             rect = self.draw_tile_graphic(start_x + i*(TILE_W+5), y + offset, f[0], f[1], True, sel)
             self.tile_rects.append((rect, i, f))
             
-        # Bots (Solo dorsos, centrados)
+        # Bots (Solo dorsos)
         for p in range(1, self.game.num_players):
             n = len(self.game.hands[p])
             if p==1: # Der
@@ -262,7 +257,6 @@ class DominoGUI:
         t = self.big_font.render("DOMINÓ PRO IA", True, HIGHLIGHT)
         self.screen.blit(t, (SCREEN_WIDTH//2 - t.get_width()//2, 100))
         
-        # Botones
         opts = [("1 vs 1", 2, False), ("4 Jugadores (FFA)", 4, False), ("2 vs 2 (Equipos)", 4, True)]
         mx, my = pygame.mouse.get_pos()
         click = pygame.mouse.get_pressed()[0]
@@ -280,7 +274,7 @@ class DominoGUI:
                 self.game = DominoGame(n, tm)
                 self.state = "PLAY"
                 self.selected_tile_idx = None
-                pygame.time.delay(200) # Debounce
+                pygame.time.delay(200)
 
     def run(self):
         while True:
@@ -295,17 +289,6 @@ class DominoGUI:
                 self.draw_board()
                 self.draw_hands()
                 
-                # Info HUD
-                if not self.game.game_over:
-                    turn_txt = f"Turno: {'TÚ' if self.game.current_player==0 else f'BOT {self.game.current_player}'}"
-                    self.screen.blit(self.font.render(turn_txt, True, (255,255,255)), (20, SCREEN_HEIGHT-100))
-                    
-                    # Mostrar por qué empezó quien empezó (solo al inicio)
-                    if len(self.game.mesa) == 0:
-                        start_info = getattr(self.game, 'start_reason', '')
-                        st = self.font.render(start_info, True, HIGHLIGHT)
-                        self.screen.blit(st, (20, 20))
-                
                 # GAME OVER MODAL
                 if self.game.game_over:
                     overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -319,7 +302,17 @@ class DominoGUI:
                     
                     sub = self.font.render("Click para volver al Menú", True, (255,255,255))
                     self.screen.blit(sub, (SCREEN_WIDTH//2 - sub.get_width()//2, SCREEN_HEIGHT//2 + 20))
-
+                  
+                # Info HUD
+                if not self.game.game_over:
+                    turn_txt = f"Turno: {'TÚ' if self.game.current_player==0 else f'BOT {self.game.current_player}'}"
+                    self.screen.blit(self.font.render(turn_txt, True, (255,255,255)), (20, SCREEN_HEIGHT-100))
+                    
+                    if len(self.game.mesa) == 0:
+                        start_info = getattr(self.game, 'start_reason', '')
+                        st = self.font.render(start_info, True, HIGHLIGHT)
+                        self.screen.blit(st, (20, 20))
+                
                 # Lógica del Juego
                 if not self.game.game_over:
                     turn = self.game.current_player
@@ -328,7 +321,7 @@ class DominoGUI:
                             # Paso automático visual
                             self.screen.blit(self.big_font.render("¡PASO!", True, (255,0,0)), (SCREEN_WIDTH//2-50, SCREEN_HEIGHT-200))
                             pygame.display.flip()
-                            pygame.time.delay(1000)
+                            pygame.time.delay(500)
                             self.game.step(None)
                     else: # IA
                         pygame.display.flip()
@@ -346,13 +339,12 @@ class DominoGUI:
                     
                     if e.type == pygame.MOUSEBUTTONDOWN:
                         if self.game.game_over:
-                            self.state = "MENU" # Volver al menú
+                            self.state = "MENU" 
                             self.game = None
                         
                         elif self.game.current_player == 0:
                             mx, my = pygame.mouse.get_pos()
                             
-                            # Chequear clic en fichas
                             for rect, idx, ficha in self.tile_rects:
                                 if rect.collidepoint(mx, my):
                                     self.selected_tile_idx = idx
@@ -361,22 +353,15 @@ class DominoGUI:
                                     possible_moves = [m for m in valid if m[0] == ficha]
                                     
                                     if not possible_moves:
-                                        pass # Sonido error?
+                                        pass 
                                     elif len(possible_moves) == 1:
                                         self.game.step(possible_moves[0])
                                         self.selected_tile_idx = None
                                     else:
-                                        # AMBIGÜEDAD: La ficha pega por los dos lados (o es la primera)
-                                        # Detectar en qué mitad se hizo clic
                                         rel_x = mx - rect.x
                                         is_left_click = rel_x < (rect.width / 2)
                                         
-                                        # Lógica inteligente de intención
-                                        # Si clic izquierda -> Intentar jugar por Lado 'L' (Extremo 0)
-                                        # Si clic derecha -> Intentar jugar por Lado 'R' (Extremo 1)
-                                        
                                         move_to_play = None
-                                        # Buscamos si existe la jugada L y fue clic izq
                                         has_L = any(m[1] == 'L' for m in possible_moves)
                                         has_R = any(m[1] == 'R' for m in possible_moves)
                                         
@@ -385,7 +370,6 @@ class DominoGUI:
                                         elif not is_left_click and has_R:
                                             move_to_play = (ficha, 'R')
                                         else:
-                                            # Fallback: Si clic izq pero solo hay R, jugamos R
                                             move_to_play = possible_moves[0]
                                             
                                         self.game.step(move_to_play)
