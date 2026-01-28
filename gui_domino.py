@@ -18,7 +18,7 @@ TILE_W = 38
 TILE_H = 76
 GAP = 2
 
-# Márgenes de seguridad para que la "Serpiente" no choque con las manos
+# Márgenes de seguridad
 MARGIN_TOP = 120
 MARGIN_BOTTOM = 150
 MARGIN_LEFT = 100
@@ -42,8 +42,11 @@ class DominoGUI:
 
         self.state = "MENU"
         self.game = None
-        self.tile_rects = [] # Para guardar colisiones de la mano
-        self.selected_tile_idx = None # Inicializamos explícitamente
+        self.tile_rects = [] 
+        self.selected_tile_idx = None
+        
+        # FIX: Variable para evitar el "Ghost Click" al volver al menú
+        self.last_click_time = 0 
 
     def draw_pips(self, surface, x, y, number, size, vertical):
         """Dibuja los puntos con precisión matemática"""
@@ -99,20 +102,10 @@ class DominoGUI:
         return rect
 
     def calculate_snake_layout(self, history, start_x, start_y, start_direction):
-        """
-        Lógica de Espiral:
-        - Rama Derecha (dir=1): Empieza derecha -> Gira ARRIBA -> Gira ABAJO...
-        - Rama Izquierda (dir=-1): Empieza izquierda -> Gira ABAJO -> Gira ARRIBA...
-        """
         layout = []
         curr_x, curr_y = start_x, start_y
-        direction = start_direction # 1=Der, -1=Izq
-        
-        # Configurar dirección vertical inicial según la rama
-        # Si empieza a la derecha, el primer giro es hacia ARRIBA (-1)
-        # Si empieza a la izquierda, el primer giro es hacia ABAJO (1)
+        direction = start_direction 
         vertical_dir = -1 if start_direction == 1 else 1
-        
         step_long = TILE_H + GAP
         step_short = TILE_W + GAP
         
@@ -122,7 +115,6 @@ class DominoGUI:
             nuevo = move['nuevo_extremo']
             is_double = (ficha[0] == ficha[1])
             
-            # 1. Determinar posición de dibujo actual
             draw_x, draw_y = curr_x, curr_y
             draw_vertical = False
             val_left, val_right = 0, 0
@@ -130,99 +122,57 @@ class DominoGUI:
             
             if is_double:
                 draw_vertical = True
-                # Ajuste vertical para centrar dobles
                 draw_y = curr_y - (TILE_H - TILE_W)//2
-                
-                if direction == -1:
-                    draw_x = curr_x - TILE_W 
-                
+                if direction == -1: draw_x = curr_x - TILE_W 
                 val_left, val_right = ficha[0], ficha[1]
                 offset = step_short
-                
             else:
                 draw_vertical = False
-                if direction == -1:
-                    draw_x = curr_x - TILE_H
-                
-                if direction == 1:
-                    val_left, val_right = conector, nuevo
-                else:
-                    val_left, val_right = nuevo, conector
-                
+                if direction == -1: draw_x = curr_x - TILE_H
+                if direction == 1: val_left, val_right = conector, nuevo
+                else: val_left, val_right = nuevo, conector
                 offset = step_long
 
-            layout.append({
-                'x': draw_x, 'y': draw_y, 
-                'v1': val_left, 'v2': val_right, 
-                'vert': draw_vertical
-            })
-            
-            # 2. Avanzar cursor
+            layout.append({'x': draw_x, 'y': draw_y, 'v1': val_left, 'v2': val_right, 'vert': draw_vertical})
             curr_x += (offset * direction)
             
-            # 3. Verificar colisión y ajustar para el SIGUIENTE paso (Lógica de Espiral)
-            # Verificamos si el PROXIMO cursor se saldría
             limit_right = SCREEN_WIDTH - MARGIN_RIGHT
             limit_left = MARGIN_LEFT
-            
-            # Predicción de posición futura para detectar choque
             next_x = curr_x + (step_long * direction)
-            
             hit_right = (direction == 1) and (next_x > limit_right)
             hit_left = (direction == -1) and (next_x < limit_left)
             
             if hit_right or hit_left:
-                # Girar horizontalmente
                 direction *= -1
-                
-                # Alinear X al borde opuesto para empate perfecto
-                if direction == 1: # Ahora vamos a la derecha (estábamos en el borde izq)
-                    curr_x = limit_left
-                else: # Ahora vamos a la izquierda (estábamos en el borde der)
-                    curr_x = limit_right
-                
-                # Aplicar movimiento vertical (Alternar según espiral)
+                if direction == 1: curr_x = limit_left
+                else: curr_x = limit_right
                 curr_y += (step_long * vertical_dir)
-                vertical_dir *= -1 # Invertir para el próximo giro
-            
+                vertical_dir *= -1
         return layout
 
     def draw_board(self):
         cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
-        
         if self.game.center_tile is None: return
 
-        # 1. Centro
         c_ficha = self.game.center_tile
         c_vert = (c_ficha[0] == c_ficha[1])
-        
         start_x = cx - (TILE_W//2 if c_vert else TILE_H//2)
         start_y = cy - (TILE_W//2) 
-        
         self.draw_tile_graphic(start_x, start_y, c_ficha[0], c_ficha[1], c_vert)
         
-        # 2. Calcular Ramas
-        # Rama Derecha
         off_x = (TILE_W if c_vert else TILE_H) + GAP
         r_x = start_x + off_x
         r_y = start_y + (TILE_H//2 if c_vert else TILE_W//2) - TILE_W//2
-        
         layout_r = self.calculate_snake_layout(self.game.history_right, r_x, r_y, 1)
-        for item in layout_r:
-            self.draw_tile_graphic(item['x'], item['y'], item['v1'], item['v2'], item['vert'])
+        for item in layout_r: self.draw_tile_graphic(item['x'], item['y'], item['v1'], item['v2'], item['vert'])
             
-        # Rama Izquierda
         l_x = start_x - GAP
         l_y = start_y + (TILE_H//2 if c_vert else TILE_W//2) - TILE_W//2
-        
         layout_l = self.calculate_snake_layout(self.game.history_left, l_x, l_y, -1)
-        for item in layout_l:
-            self.draw_tile_graphic(item['x'], item['y'], item['v1'], item['v2'], item['vert'])
+        for item in layout_l: self.draw_tile_graphic(item['x'], item['y'], item['v1'], item['v2'], item['vert'])
 
     def draw_hands(self):
         self.tile_rects = [] 
-        
-        # Humano (Abajo)
         hand = self.game.hands[0]
         total_w = len(hand) * (TILE_W + 5)
         start_x = (SCREEN_WIDTH - total_w) // 2
@@ -234,23 +184,16 @@ class DominoGUI:
             rect = self.draw_tile_graphic(start_x + i*(TILE_W+5), y + offset, f[0], f[1], True, sel)
             self.tile_rects.append((rect, i, f))
             
-        # Bots (Solo dorsos)
         for p in range(1, self.game.num_players):
             n = len(self.game.hands[p])
-            if p==1: # Der
-                h = n*25
-                sy = (SCREEN_HEIGHT - h)//2
-                sx = SCREEN_WIDTH - 50
+            if p==1:
+                h = n*25; sy = (SCREEN_HEIGHT - h)//2; sx = SCREEN_WIDTH - 50
                 for k in range(n): pygame.draw.rect(self.screen, (80,60,40), (sx, sy+k*25, 40, 20), border_radius=3)
-            elif p==2: # Arr
-                w = n*25
-                sx = (SCREEN_WIDTH - w)//2
-                sy = 20
+            elif p==2:
+                w = n*25; sx = (SCREEN_WIDTH - w)//2; sy = 20
                 for k in range(n): pygame.draw.rect(self.screen, (80,60,40), (sx+k*25, sy, 20, 40), border_radius=3)
-            elif p==3: # Izq
-                h = n*25
-                sy = (SCREEN_HEIGHT - h)//2
-                sx = 10
+            elif p==3:
+                h = n*25; sy = (SCREEN_HEIGHT - h)//2; sx = 10
                 for k in range(n): pygame.draw.rect(self.screen, (80,60,40), (sx, sy+k*25, 40, 20), border_radius=3)
 
     def draw_menu(self):
@@ -262,6 +205,10 @@ class DominoGUI:
         mx, my = pygame.mouse.get_pos()
         click = pygame.mouse.get_pressed()[0]
         
+        current_time = pygame.time.get_ticks()
+        # FIX: Si hemos hecho clic hace menos de 300ms, ignorar clics en el menú
+        input_blocked = (current_time - self.last_click_time < 300)
+
         for i, (txt, n, tm) in enumerate(opts):
             rect = pygame.Rect(SCREEN_WIDTH//2 - 150, 250 + i*90, 300, 70)
             col = (50, 100, 50) if rect.collidepoint(mx, my) else (40, 40, 50)
@@ -271,11 +218,13 @@ class DominoGUI:
             surf = self.font.render(txt, True, (255,255,255))
             self.screen.blit(surf, (rect.centerx - surf.get_width()//2, rect.centery - surf.get_height()//2))
             
-            if click and rect.collidepoint(mx, my):
+            # FIX: Solo procesar si el input no está bloqueado por el cooldown
+            if click and rect.collidepoint(mx, my) and not input_blocked:
                 self.game = DominoGame(n, tm)
                 self.state = "PLAY"
                 self.selected_tile_idx = None
-                pygame.time.delay(200)
+                self.last_click_time = current_time # Actualizamos el tiempo para el nuevo juego
+                pygame.time.delay(100)
 
     def run(self):
         while True:
@@ -290,7 +239,6 @@ class DominoGUI:
                 self.draw_board()
                 self.draw_hands()
                 
-                # GAME OVER MODAL
                 if self.game.game_over:
                     overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
                     overlay.fill((0,0,0, 180))
@@ -304,7 +252,6 @@ class DominoGUI:
                     sub = self.font.render("Click para volver al Menú", True, (255,255,255))
                     self.screen.blit(sub, (SCREEN_WIDTH//2 - sub.get_width()//2, SCREEN_HEIGHT//2 + 20))
                   
-                # Info HUD
                 if not self.game.game_over:
                     turn_txt = f"Turno: {'TÚ' if self.game.current_player==0 else f'BOT {self.game.current_player}'}"
                     self.screen.blit(self.font.render(turn_txt, True, (255,255,255)), (20, SCREEN_HEIGHT-100))
@@ -314,12 +261,10 @@ class DominoGUI:
                         st = self.font.render(start_info, True, HIGHLIGHT)
                         self.screen.blit(st, (20, 20))
                 
-                # Lógica del Juego
                 if not self.game.game_over:
                     turn = self.game.current_player
                     if turn == 0: # Humano
                         if not self.game.get_valid_moves(0):
-                            # Paso automático visual
                             self.screen.blit(self.big_font.render("¡PASO!", True, (255,0,0)), (SCREEN_WIDTH//2-50, SCREEN_HEIGHT-200))
                             pygame.display.flip()
                             pygame.time.delay(500)
@@ -334,41 +279,34 @@ class DominoGUI:
                         else:
                             self.game.step(None)
 
-                # Eventos
                 for e in pygame.event.get():
                     if e.type == pygame.QUIT: pygame.quit(); sys.exit()
                     
                     if e.type == pygame.MOUSEBUTTONDOWN:
                         if self.game.game_over:
+                            # FIX: Registramos el tiempo exacto del clic para activar el cooldown
+                            self.last_click_time = pygame.time.get_ticks()
                             self.state = "MENU" 
                             self.game = None
                         
                         elif self.game.current_player == 0:
                             mx, my = pygame.mouse.get_pos()
-                            
-                            # Variable para controlar si ya procesamos un click en una ficha este frame
                             processed_click = False
 
                             for rect, idx, ficha in self.tile_rects:
                                 if rect.collidepoint(mx, my):
                                     processed_click = True
                                     
-                                    # --- FIX: Verificar validez ANTES de marcar ---
                                     valid = self.game.get_valid_moves(0)
-                                    # Filtramos movimientos que coincidan con esta ficha
                                     possible_moves = [m for m in valid if m[0] == ficha]
                                     
                                     if not possible_moves:
-                                        # MOVIMIENTO INVÁLIDO: No hacemos nada y deseleccionamos
-                                        # para evitar que la UI se quede "pegada" visualmente.
                                         self.selected_tile_idx = None
                                     elif len(possible_moves) == 1:
-                                        # Solo una opción válida
-                                        self.selected_tile_idx = idx # Marcamos brevemente
+                                        self.selected_tile_idx = idx 
                                         self.game.step(possible_moves[0])
-                                        self.selected_tile_idx = None # Limpiamos al jugar
+                                        self.selected_tile_idx = None 
                                     else:
-                                        # Múltiples opciones (L/R)
                                         self.selected_tile_idx = idx
                                         
                                         rel_x = mx - rect.x
@@ -383,14 +321,11 @@ class DominoGUI:
                                         elif not is_left_click and has_R:
                                             move_to_play = (ficha, 'R')
                                         else:
-                                            # Si la lógica de click falla (ej. tiene L y R pero no coincide el lado),
-                                            # elegimos la primera por defecto para no bloquear
                                             move_to_play = possible_moves[0]
                                             
                                         self.game.step(move_to_play)
                                         self.selected_tile_idx = None
                                     
-                                    # Solo procesamos una ficha por clic
                                     break
 
                 pygame.display.flip()
