@@ -1,3 +1,310 @@
+# domino_engine.py
+
+```py
+import random
+
+class DominoGame:
+    def __init__(self, num_players=4, teams=False):
+        self.num_players = num_players
+        self.teams = teams
+        self.all_pieces = [(i, j) for i in range(10) for j in range(i, 10)]
+        self.reset()
+
+    def reset(self):
+        # 1. Barajar REALMENTE bien
+        self.piezas = self.all_pieces[:]
+        random.shuffle(self.piezas)
+        
+        # 2. Repartir
+        self.hands = {}
+        for p in range(self.num_players):
+            start = p * 10
+            end = start + 10
+            self.hands[p] = self.piezas[start:end]
+            
+        self.mesa = [] 
+        self.extremos = [-1, -1] 
+        
+        # Historial separado para dibujar ramas izquierda/derecha
+        self.history_left = []  
+        self.history_right = [] 
+        self.center_tile = None 
+        
+        # 3. Decidir quién sale
+        self.current_player, self.start_reason = self._find_starting_player()
+        
+        self.winner = -1
+        self.game_over = False
+        self.pass_count = 0
+        
+        return self._get_state()
+
+    def _find_starting_player(self):
+        # Prioridad: Doble más alto
+        for d in range(9, -1, -1):
+            ficha = (d, d)
+            for p in range(self.num_players):
+                if ficha in self.hands[p]:
+                    return p, f"Salida por Doble {d}"
+        
+        # Si nadie tiene dobles (raro en doble 9), aleatorio
+        starter = random.randint(0, self.num_players - 1)
+        return starter, "Sorteo Aleatorio (Nadie tenía dobles)"
+
+    def get_valid_moves(self, player):
+        hand = self.hands[player]
+        if self.center_tile is None:
+            return [(f, 'L') for f in hand] 
+
+        valid = []
+        l_val, r_val = self.extremos
+        
+        for f in hand:
+            v1, v2 = f
+            # Detectar coincidencias
+            matches_l = (v1 == l_val or v2 == l_val)
+            matches_r = (v1 == r_val or v2 == r_val)
+            
+            if matches_l: valid.append((f, 'L'))
+            
+            # Solo agregamos R si es distinto a L o si es la misma ficha pero conecta al otro lado
+            if matches_r:
+                # Evitar duplicar la misma jugada exacta si l_val == r_val
+                if l_val != r_val or not matches_l:
+                    valid.append((f, 'R'))
+                elif l_val == r_val and matches_l:
+                    # Caso especial: 6-6 en mesa, tengo 6-1. Pega por los dos lados igual.
+                    # Agregamos R explícitamente para permitir la elección del usuario
+                    valid.append((f, 'R'))
+                    
+        return valid
+
+    def step(self, action):
+        player = self.current_player
+        
+        if action is None:
+            self.pass_count += 1
+        else:
+            ficha, lado = action
+            if ficha not in self.hands[player]:
+                return -100, True 
+
+            self.hands[player].remove(ficha)
+            
+            # --- FIX: Actualizar la lista 'mesa' ---
+            self.mesa.append(ficha)
+            # -------------------------------------
+
+            if self.center_tile is None:
+                self.center_tile = ficha
+                self.extremos = [ficha[0], ficha[1]]
+            else:
+                target = self.extremos[0] if lado == 'L' else self.extremos[1]
+                v1, v2 = ficha
+                
+                if v1 == target:
+                    nuevo = v2
+                    conector = v1
+                else:
+                    nuevo = v1
+                    conector = v2
+                
+                move_data = {
+                    'ficha': ficha, 
+                    'player': player, 
+                    'conector': conector, 
+                    'nuevo_extremo': nuevo
+                }
+                
+                if lado == 'L':
+                    self.extremos[0] = nuevo
+                    self.history_left.append(move_data)
+                else:
+                    self.extremos[1] = nuevo
+                    self.history_right.append(move_data)
+            
+            self.pass_count = 0
+
+        if len(self.hands[player]) == 0:
+            self.winner = player
+            self.game_over = True
+            return 100, True
+        
+        if self.pass_count >= self.num_players:
+            self.game_over = True
+            self.winner = self._calculate_winner_by_points()
+            return 0, True
+            
+        self.current_player = (self.current_player + 1) % self.num_players
+        return 0, False
+
+    def _calculate_winner_by_points(self):
+        sums = {p: sum(f[0]+f[1] for f in h) for p, h in self.hands.items()}
+        if self.teams and self.num_players == 4:
+            t1 = sums[0] + sums[2]
+            t2 = sums[1] + sums[3]
+            return 0 if t1 < t2 else 1
+        return min(sums, key=sums.get)
+        
+    def _get_state(self): return {}
+```
+
+# domino_gym.py
+
+```py
+import gymnasium as gym
+import numpy as np
+from gymnasium import spaces
+from domino_engine import DominoGame
+
+class DominoEnv(gym.Env):
+    metadata = {'render.modes': ['human']}
+
+    def __init__(self):
+        super(DominoEnv, self).__init__()
+        self.game = DominoGame()
+        
+        # 110 Acciones posibles
+        self.action_space = spaces.Discrete(110)
+
+        # Observación (Mano + Mesa + Historial)
+        # Aumentamos un poco el tamaño para futuras estrategias
+        self.observation_space = spaces.Box(low=0, high=1, shape=(130,), dtype=np.float32)
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.game.reset()
+        return self._get_obs(), {}
+
+    def step(self, action_idx):
+        # Decodificar acción
+        ficha, lado = self._decode_action(action_idx)
+        player = self.game.current_player
+        
+        # Validar jugada (aunque con masking no debería fallar, mantenemos la seguridad)
+        valid_moves = self.game.get_valid_moves(player)
+        
+        # Verificar si la acción elegida es válida
+        move_is_valid = False
+        chosen_move = (ficha, lado)
+        
+        # Búsqueda exacta de la jugada
+        real_move = None
+        for vm in valid_moves:
+            f_valid, l_valid = vm
+            if set(f_valid) == set(ficha) and l_valid == lado:
+                move_is_valid = True
+                real_move = vm
+                break
+        
+        if not valid_moves:
+            # Si no hay jugadas, forzamos paso (Action masking se encargará de esto también)
+            _, game_done = self.game.step(None)
+            reward = 0
+        elif not move_is_valid:
+            # Esto teóricamente NO DEBERÍA PASAR con Masking, pero por seguridad:
+            print(f"⚠️ ALERTA: Jugada ilegal saltó el filtro! {chosen_move}")
+            return self._get_obs(), -100, True, False, {}
+        else:
+            # Ejecutar jugada real
+            reward_points, game_done = self.game.step(real_move)
+            
+            # SISTEMA DE RECOMPENSAS MEJORADO
+            if game_done:
+                if self.game.winner == player:
+                    reward = 100 # Ganar es lo único que importa
+                else:
+                    reward = -10 # Perder duele
+            else:
+                reward = 0.1 # Pequeño incentivo por seguir jugando
+        
+        terminated = game_done
+        return self._get_obs(), reward, terminated, False, {}
+
+    def action_masks(self):
+        """
+        NUEVA FUNCIÓN MÁGICA:
+        Devuelve una lista de True/False.
+        True = Botón habilitado (Jugada válida).
+        False = Botón deshabilitado.
+        """
+        mask = np.zeros(110, dtype=bool)
+        player = self.game.current_player
+        valid_moves = self.game.get_valid_moves(player)
+        
+        if not valid_moves:
+            # Si no hay jugadas, deberíamos tener una acción de "PASAR".
+            # Como nuestro modelo actual fuerza a elegir ficha, 
+            # truco: habilitamos la acción 0 pero en step manejamos el paso.
+            # O mejor: Si valid_moves está vacío, el motor hace step(None) automáticamente
+            # en el bucle de entrenamiento si detecta máscara vacía.
+            # Pero para simplificar, dejaremos todo en False y el algoritmo sabrá que debe pasar.
+            return mask 
+
+        for move in valid_moves:
+            ficha, lado = move
+            # Buscar el índice de esta acción
+            idx = self._encode_action(ficha, lado)
+            if idx < 110:
+                mask[idx] = True
+                
+        return mask
+
+    def _encode_action(self, ficha, lado):
+        """Convierte jugada real a índice 0-109"""
+        # Ordenamos la ficha para buscarla en la lista maestra
+        f_sorted = tuple(sorted(ficha))
+        try:
+            ficha_idx = self.game.all_pieces.index(f_sorted)
+            lado_idx = 0 if lado == 'L' else 1
+            return ficha_idx * 2 + lado_idx
+        except:
+            return 0
+
+    def _get_obs(self):
+        player = self.game.current_player
+        hand = self.game.hands[player]
+        mesa_fichas = self.game.mesa
+        extremos = self.game.extremos
+        
+        hand_vec = np.zeros(55, dtype=np.float32)
+        for f in hand:
+            hand_vec[self._get_ficha_index(f)] = 1.0
+            
+        left_vec = np.zeros(10, dtype=np.float32)
+        right_vec = np.zeros(10, dtype=np.float32)
+        if extremos[0] != -1:
+            left_vec[extremos[0]] = 1.0
+            right_vec[extremos[1]] = 1.0
+            
+        board_vec = np.zeros(55, dtype=np.float32)
+        for f in mesa_fichas:
+            board_vec[self._get_ficha_index(f)] = 1.0
+            
+        return np.concatenate([hand_vec, left_vec, right_vec, board_vec])
+
+    def _get_ficha_index(self, ficha):
+        f_sorted = tuple(sorted(ficha))
+        try:
+            return self.game.all_pieces.index(f_sorted)
+        except:
+            return 0
+
+    def _decode_action(self, action_idx):
+        ficha_idx = action_idx // 2
+        lado_idx = action_idx % 2
+        ficha = self.game.all_pieces[ficha_idx]
+        lado = 'L' if lado_idx == 0 else 'R'
+        return ficha, lado
+```
+
+# DominoWithIAGame.zip
+
+This is a binary file of the type: Compressed Archive
+
+# gui_domino.py
+
+```py
 import pygame
 import sys
 import random
@@ -43,8 +350,7 @@ class DominoGUI:
         self.state = "MENU"
         self.game = None
         self.tile_rects = [] # Para guardar colisiones de la mano
-        self.selected_tile_idx = None # Inicializamos explícitamente
-
+        
     def draw_pips(self, surface, x, y, number, size, vertical):
         """Dibuja los puntos con precisión matemática"""
         if vertical:
@@ -346,31 +652,19 @@ class DominoGUI:
                         elif self.game.current_player == 0:
                             mx, my = pygame.mouse.get_pos()
                             
-                            # Variable para controlar si ya procesamos un click en una ficha este frame
-                            processed_click = False
-
                             for rect, idx, ficha in self.tile_rects:
                                 if rect.collidepoint(mx, my):
-                                    processed_click = True
+                                    self.selected_tile_idx = idx
                                     
-                                    # --- FIX: Verificar validez ANTES de marcar ---
                                     valid = self.game.get_valid_moves(0)
-                                    # Filtramos movimientos que coincidan con esta ficha
                                     possible_moves = [m for m in valid if m[0] == ficha]
                                     
                                     if not possible_moves:
-                                        # MOVIMIENTO INVÁLIDO: No hacemos nada y deseleccionamos
-                                        # para evitar que la UI se quede "pegada" visualmente.
-                                        self.selected_tile_idx = None
+                                        pass 
                                     elif len(possible_moves) == 1:
-                                        # Solo una opción válida
-                                        self.selected_tile_idx = idx # Marcamos brevemente
                                         self.game.step(possible_moves[0])
-                                        self.selected_tile_idx = None # Limpiamos al jugar
+                                        self.selected_tile_idx = None
                                     else:
-                                        # Múltiples opciones (L/R)
-                                        self.selected_tile_idx = idx
-                                        
                                         rel_x = mx - rect.x
                                         is_left_click = rel_x < (rect.width / 2)
                                         
@@ -383,18 +677,103 @@ class DominoGUI:
                                         elif not is_left_click and has_R:
                                             move_to_play = (ficha, 'R')
                                         else:
-                                            # Si la lógica de click falla (ej. tiene L y R pero no coincide el lado),
-                                            # elegimos la primera por defecto para no bloquear
                                             move_to_play = possible_moves[0]
                                             
                                         self.game.step(move_to_play)
                                         self.selected_tile_idx = None
-                                    
-                                    # Solo procesamos una ficha por clic
-                                    break
 
                 pygame.display.flip()
                 self.clock.tick(30)
 
 if __name__ == "__main__":
     DominoGUI().run()
+```
+
+# modelos_domino_mask\domino_pro.zip
+
+This is a binary file of the type: Compressed Archive
+
+# README.txt
+
+```txt
+Alejandro Javier Morejón Santiesteban
+
+```
+
+# train_domino.py
+
+```py
+import os
+from sb3_contrib import MaskablePPO # <--- CAMBIO IMPORTANTE
+from sb3_contrib.common.maskable.utils import get_action_masks # Para la demo
+from sb3_contrib.common.wrappers import ActionMasker
+from stable_baselines3.common.env_util import make_vec_env
+from domino_gym import DominoEnv
+
+# Función auxiliar para envolver el entorno con máscara
+def mask_fn(env: DominoEnv):
+    return env.action_masks()
+
+def make_env():
+    env = DominoEnv()
+    return ActionMasker(env, mask_fn)
+
+def main():
+    models_dir = "modelos_domino_mask"
+    if not os.path.exists(models_dir):
+        os.makedirs(models_dir)
+
+    print("🚀 Iniciando entrenamiento CON MÁSCARA DE ACCIÓN (Nivel Experto)...")
+    
+    # Usamos solo 1 entorno primero para asegurar que la máscara funciona, 
+    # luego podríamos vectorizar, pero MaskablePPO a veces prefiere entorno simple al inicio.
+    # Para tu i9, usaremos 8 entornos vectorizados con Wrapper especial.
+    
+    # NOTA: Vectorizar ActionMasker es complejo, vamos a hacerlo simple con 1 entorno super rápido
+    # o usar dummy vec env. Probemos simple primero para estabilidad.
+    env = make_env()
+
+    model = MaskablePPO(
+        "MlpPolicy", 
+        env, 
+        verbose=1, 
+        device='cpu',
+        learning_rate=0.0003,
+        gamma=0.99 # Importante para estrategia a largo plazo
+    )
+
+    # Entrenamos 100,000 pasos (será mucho más eficiente que 500k sin máscara)
+    model.learn(total_timesteps=100_000)
+    
+    model.save(f"{models_dir}/domino_pro")
+    print("✅ Modelo guardado.")
+
+    # --- DEMOSTRACIÓN ---
+    print("\n--- DEMO JUGANDO (Sin errores garantizado) ---")
+    env_test = DominoEnv() # Entorno puro
+    obs, _ = env_test.reset()
+    done = False
+    
+    while not done:
+        # Obtener máscaras válidas
+        action_masks = env_test.action_masks()
+        
+        # Si no hay jugadas (máscara vacía), pasamos manual
+        if not any(action_masks):
+            print("IA tiene que pasar.")
+            obs, reward, done, _, _ = env_test.step(0) # Acción dummy, el motor sabe manejar paso
+        else:
+            # Predecir usando máscara
+            action, _ = model.predict(obs, action_masks=action_masks, deterministic=True)
+            
+            ficha, lado = env_test._decode_action(action)
+            print(f"IA juega: {ficha} en {lado}")
+            obs, reward, done, _, _ = env_test.step(action)
+
+            if reward == -100:
+                print("❌ IMPOSIBLE: Si sale esto, hay un bug en la máscara.")
+
+if __name__ == "__main__":
+    main()
+```
+
