@@ -13,9 +13,8 @@ class DominoEnv(gym.Env):
         # 110 Acciones posibles
         self.action_space = spaces.Discrete(110)
 
-        # Observación (Mano + Mesa + Historial)
-        # Aumentamos un poco el tamaño para futuras estrategias
-        self.observation_space = spaces.Box(low=0, high=1, shape=(130,), dtype=np.float32)
+        # Vector de 133: Mano(55) + Extremos(20) + Mesa(55) + Cuentas Rival(3)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(133,), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -23,82 +22,54 @@ class DominoEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action_idx):
-        # Decodificar acción
         ficha, lado = self._decode_action(action_idx)
         player = self.game.current_player
         
-        # Validar jugada (aunque con masking no debería fallar, mantenemos la seguridad)
         valid_moves = self.game.get_valid_moves(player)
         
-        # Verificar si la acción elegida es válida
-        move_is_valid = False
-        chosen_move = (ficha, lado)
-        
-        # Búsqueda exacta de la jugada
         real_move = None
         for vm in valid_moves:
             f_valid, l_valid = vm
             if set(f_valid) == set(ficha) and l_valid == lado:
-                move_is_valid = True
                 real_move = vm
                 break
         
         if not valid_moves:
-            # Si no hay jugadas, forzamos paso (Action masking se encargará de esto también)
             _, game_done = self.game.step(None)
             reward = 0
-        elif not move_is_valid:
-            # Esto teóricamente NO DEBERÍA PASAR con Masking, pero por seguridad:
-            print(f"⚠️ ALERTA: Jugada ilegal saltó el filtro! {chosen_move}")
-            return self._get_obs(), -100, True, False, {}
+        elif not real_move:
+            # Seguridad extra
+            return self._get_obs(), -10, True, False, {}
         else:
-            # Ejecutar jugada real
             reward_points, game_done = self.game.step(real_move)
             
-            # SISTEMA DE RECOMPENSAS MEJORADO
             if game_done:
                 if self.game.winner == player:
-                    reward = 100 # Ganar es lo único que importa
+                    reward = 100 
                 else:
-                    reward = -10 # Perder duele
+                    reward = -20 # Penalización fuerte
             else:
-                reward = 0.1 # Pequeño incentivo por seguir jugando
+                reward = 0.1 
         
         terminated = game_done
         return self._get_obs(), reward, terminated, False, {}
 
     def action_masks(self):
-        """
-        NUEVA FUNCIÓN MÁGICA:
-        Devuelve una lista de True/False.
-        True = Botón habilitado (Jugada válida).
-        False = Botón deshabilitado.
-        """
         mask = np.zeros(110, dtype=bool)
         player = self.game.current_player
         valid_moves = self.game.get_valid_moves(player)
         
         if not valid_moves:
-            # Si no hay jugadas, deberíamos tener una acción de "PASAR".
-            # Como nuestro modelo actual fuerza a elegir ficha, 
-            # truco: habilitamos la acción 0 pero en step manejamos el paso.
-            # O mejor: Si valid_moves está vacío, el motor hace step(None) automáticamente
-            # en el bucle de entrenamiento si detecta máscara vacía.
-            # Pero para simplificar, dejaremos todo en False y el algoritmo sabrá que debe pasar.
             return mask 
 
         for move in valid_moves:
             ficha, lado = move
-            # Buscar el índice de esta acción
             idx = self._encode_action(ficha, lado)
             if idx < 110:
                 mask[idx] = True
-                
         return mask
 
     def _encode_action(self, ficha, lado):
-        """Convierte jugada real a índice 0-109"""
-        # Ordenamos la ficha para buscarla en la lista maestra
         f_sorted = tuple(sorted(ficha))
         try:
             ficha_idx = self.game.all_pieces.index(f_sorted)
@@ -127,7 +98,18 @@ class DominoEnv(gym.Env):
         for f in mesa_fichas:
             board_vec[self._get_ficha_index(f)] = 1.0
             
-        return np.concatenate([hand_vec, left_vec, right_vec, board_vec])
+        # Observación de oponentes (Normalizada 0-1)
+        opp_counts = np.zeros(3, dtype=np.float32)
+        if self.game.num_players == 4:
+            opp_counts[0] = len(self.game.hands[1]) / 10.0
+            opp_counts[1] = len(self.game.hands[2]) / 10.0
+            opp_counts[2] = len(self.game.hands[3]) / 10.0
+        elif self.game.num_players == 2:
+            opp_counts[0] = len(self.game.hands[1]) / 10.0
+            opp_counts[1] = 0.0 
+            opp_counts[2] = 0.0
+            
+        return np.concatenate([hand_vec, left_vec, right_vec, board_vec, opp_counts])
 
     def _get_ficha_index(self, ficha):
         f_sorted = tuple(sorted(ficha))
